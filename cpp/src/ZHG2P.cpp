@@ -25,7 +25,7 @@ static const std::unordered_map<std::string, std::vector<std::string>> FINAL_MAP
     {"ian", {"j", "ɛ0", "n"}}, {"iang", {"j", "a0", "ŋ"}}, {"iao", {"j", "au̯0"}},
     {"ie", {"j", "e0"}}, {"in", {"i0", "n"}}, {"ing", {"i0", "ŋ"}},
     {"iong", {"j", "ʊ0", "ŋ"}}, {"iou", {"j", "ou̯0"}}, {"ong", {"ʊ0", "ŋ"}},
-    {"ou", {"ou̯0"}}, {"o", {"o0"}}, {"u", {"u0"}}, {"ua", {"w", "a0"}},
+    {"ou", {"ou̯0"}}, {"o", {"w", "o0"}}, {"u", {"u0"}}, {"ua", {"w", "a0"}},
     {"uai", {"w", "ai̯0"}}, {"uan", {"w", "a0", "n"}}, {"uang", {"w", "a0", "ŋ"}},
     {"ui", {"w", "ei̯0"}}, {"un", {"w", "ə0", "n"}}, {"ueng", {"w", "ə0", "ŋ"}},
     {"uo", {"w", "o0"}}, {"ue", {"ɥ", "e0"}}, {"uen", {"w", "ə0", "n"}}, {"uei", {"w", "ei̯0"}},
@@ -104,6 +104,17 @@ static std::string trim(const std::string& str) {
     return str.substr(first, (last - first + 1));
 }
 
+static size_t count_text_chars(const std::string& text) {
+    return text.length();
+    size_t count = 0;
+    for (size_t i = 0; i < text.length(); ++i) {
+        if (text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r' && text[i] != ',' && text[i] != '.' && text[i] != '!' && text[i] != '?' && text[i] != ':' && text[i] != ';' && text[i] != '"' && text[i] != '\'') {
+            count++;
+        }
+    }
+    return count;
+}
+
 // ==========================================
 // ZHG2P Implementation
 // ==========================================
@@ -130,6 +141,8 @@ std::string ZHG2P::retone(std::string p) {
     p = replace_all(p, "\u0279\u0329", "ɨ"); 
     p = replace_all(p, "ɻ̩", "ɨ"); 
     p = replace_all(p, "ɹ̩", "ɨ"); 
+    
+    //p = replace_all(p, "\u032F", "");
 
     return p;
 }
@@ -210,6 +223,32 @@ ZHG2P::PinyinParts ZHG2P::parse_pinyin(const std::string& raw_pinyin) {
 
     parts.initial = p_initial;
     parts.final = base.substr(p_initial.length());
+    
+    // u 碰到 j q x 变 ü，读音改变
+    if (!parts.initial.empty()) {
+        if (parts.final == "iu") {
+            parts.final = "iou";  // liu -> liou
+        } else if (parts.final == "ui") {
+            parts.final = "uei";  // dui -> duei
+        } else if (parts.final == "un") {
+            // Only for non-j/q/x initials (j/q/x + un will become ün later)
+            if (parts.initial != "j" && parts.initial != "q" && parts.initial != "x") {
+                parts.final = "uen";  // dun -> duen
+            }
+        }
+    }
+    
+    if (parts.initial == "j" || parts.initial == "q" || parts.initial == "x") {
+        if (parts.final == "u") {
+            parts.final = "ü";
+        } else if (parts.final == "ue") {
+            parts.final = "üe";
+        } else if (parts.final == "uan") {
+            parts.final = "üan";
+        } else if (parts.final == "un") {
+            parts.final = "ün";
+        }
+    }
     
     return parts;
 }
@@ -328,9 +367,6 @@ std::string ZHG2P::legacy_call(const std::string& text) {
     
     // Trim trailing space if needed
     if (!result.empty() && result.back() == ' ') result.pop_back();
-
-    // Remove \u032F (815)
-    result = replace_all(result, "\u032F", "");
     return result;
 }
 
@@ -343,12 +379,12 @@ std::pair<std::string, std::string> ZHG2P::operator()(const std::string& text) {
     }
     processed_text = map_punctuation(processed_text);
 
+    int text_char_count = count_text_chars(processed_text);
     // Default to legacy_call for now as we don't have the 1.1 frontend ported
     if (frontend) {
         auto tokens = (*frontend)(processed_text);
         std::string result;
         bool last_was_eng = false;
-
         for (size_t idx = 0; idx < tokens.size(); ++idx) {
              const auto& tk = tokens[idx];
              bool is_eng = (tk.tag == "eng");
@@ -421,15 +457,25 @@ std::pair<std::string, std::string> ZHG2P::operator()(const std::string& text) {
                  if (!pinyin_acc.empty()) {
                      result += py2ipa(pinyin_acc);
                  }
-                 
-                // Add space after Chinese word (if not last token and next is not punctuation) result length <= 64 (192/3)
-                 if (idx + 1 < tokens.size() && tokens[idx + 1].tag != "x" && result.length() < 64) {
-                     result += " ";
-                 }
+
+                if (idx + 1 < tokens.size() && tokens[idx + 1].tag != "x" && text_char_count <= 6) {
+
+                    if (text_char_count <= 4) {
+                        result += "  ";
+                    } else {
+                        result += " ";
+                    }
+                }
 
              }
              last_was_eng = is_eng;
         }
+
+        if(text_char_count > 6) {
+            result += "   ";
+        }
+
+        //result = replace_all(result, "\u032F", "");
 
         // printf("Processed with ZHFrontend: %s \n", result.c_str());
         // printf("Result length: %zu\n", result.length());
