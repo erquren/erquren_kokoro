@@ -18,7 +18,11 @@ int main(int argc, char** argv) {
     std::setlocale(LC_ALL, "en_US.UTF-8");
 
     cmdline::parser cmd;
+#if defined(CHIP_AX650)    
     cmd.add<std::string>("axmodel_dir", 0, "model path", false, "../models");
+#else
+    cmd.add<std::string>("axmodel_dir", 0, "model path", false, "../models_620E");
+#endif
     cmd.add<std::string>("text", 't', "Text to be generated", false, "我想留在大家身边，从过去，一同迈向明天");
     cmd.add<std::string>("lang", 'l', "Support a(American English) or z(Chinese) or j(Japanese)", false, "z");
     cmd.add<std::string>("voice_path", 0, "Binary voices store path", false, "./voices");

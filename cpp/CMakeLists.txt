@@ -66,11 +66,11 @@ install(TARGETS
 
 set_target_properties(kokoro
     PROPERTIES
-    INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib"
+    INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib;$ORIGIN/"
 )
 set_target_properties(kokoro_srv
     PROPERTIES
-    INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib"
+    INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib;$ORIGIN/"
 )  
 # set_target_properties(test_ax_model
 #     PROPERTIES
