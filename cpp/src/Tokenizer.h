@@ -17,6 +17,7 @@ struct TokenizerConfig {
     std::string pinyin_char = "pinyin.txt";
     std::string pinyin_phrase = "pinyin_phrase.txt";
     std::string cmu_dict = "cmudict-0.7b/cmudict.dict";
+    std::string espeak_data_path = "espeak-ng-data";
 };
 
 class Tokenizer {

@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     cmdline::parser cmd;
     cmd.add<int>("port", 'p', "Server port", false, 8080);
     cmd.add<std::string>("axmodel_dir", 0, "model path", false, "../models");
-    cmd.add<std::string>("lang", 'l', "Language code, Only support a(American English) or z(Chinese) currently", false, "z");
+    cmd.add<std::string>("lang", 'l', "Language code, support a(American English) or z(Chinese) or j(Japanese)", false, "z");
     cmd.add<std::string>("voice_path", 0, "Binary voices store path", false, "./voices");
     cmd.add<std::string>("voice_name", 'v', "Speaker voice name, check possible choices from voices/", false, "zf_xiaoxiao");
     cmd.add<int>("max_len", 'm', "Max input token num, fixed by model, no need to change usually", false, 96);

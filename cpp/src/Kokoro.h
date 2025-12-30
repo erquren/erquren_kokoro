@@ -81,7 +81,8 @@ public:
         const std::string& lang_code = "z",
         const std::string& voices_path = "./voices", 
         const std::string& voice_name = "af_heart",
-        const std::string& vocab_path = "dict/vocab.txt");
+        const std::string& vocab_path = "dict/vocab.txt",
+        const std::string& espeak_data_path = "./espeak-ng-data");
     
     bool get_voice_style(const std::string& voices_path, const std::string& voice_name);
 

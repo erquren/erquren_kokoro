@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
     cmdline::parser cmd;
     cmd.add<std::string>("axmodel_dir", 0, "model path", false, "../models");
     cmd.add<std::string>("text", 't', "Text to be generated", false, "我想留在大家身边，从过去，一同迈向明天");
-    cmd.add<std::string>("lang", 'l', "Language code, Only support a(American English) or z(Chinese) currently", false, "z");
+    cmd.add<std::string>("lang", 'l', "Support a(American English) or z(Chinese) or j(Japanese)", false, "z");
     cmd.add<std::string>("voice_path", 0, "Binary voices store path", false, "./voices");
     cmd.add<std::string>("voice_name", 'v', "Speaker voice name, check possible choices from voices/", false, "zf_xiaoxiao");
     cmd.add<std::string>("output", 'o', "Output file path", false, "output.wav");

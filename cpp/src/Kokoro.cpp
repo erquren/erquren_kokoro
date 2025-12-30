@@ -235,7 +235,13 @@ Kokoro::~Kokoro() {
     // Resources cleaned up by wrappers
 }
 
-bool Kokoro::init(const std::string& model_path, int max_seq_len, const std::string& lang_code, const std::string& voices_path, const std::string& voice_name, const std::string& vocab_path) {
+bool Kokoro::init(const std::string& model_path, 
+        int max_seq_len, 
+        const std::string& lang_code, 
+        const std::string& voices_path, 
+        const std::string& voice_name, 
+        const std::string& vocab_path,
+        const std::string& espeak_data_path) {
     max_seq_len_ = max_seq_len;
     voices_path_ = voices_path;
     voice_name_ = voice_name;
@@ -311,7 +317,9 @@ bool Kokoro::init(const std::string& model_path, int max_seq_len, const std::str
     }
 
     // Initialize Tokenizer
-    tokenizer_ = std::make_unique<Tokenizer>(lang_code_, TokenizerConfig{}, vocab);
+    TokenizerConfig tokenizer_config;
+    tokenizer_config.espeak_data_path = espeak_data_path;
+    tokenizer_ = std::make_unique<Tokenizer>(lang_code_, tokenizer_config, vocab);
 
     // Prepare model outputs
     duration_.resize(model1_.get_output_size(0) / sizeof(float));

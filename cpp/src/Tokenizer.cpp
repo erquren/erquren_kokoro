@@ -29,8 +29,7 @@ Tokenizer::Tokenizer(const std::string& lang_code, const TokenizerConfig& config
             );
             g2p_ = std::make_unique<ZHG2P>(processor_, "1.1", "<unk>", cmu_dict);
         } else {
-            const char* data_path = "./third_party/espeak-ng/share/espeak-ng-data";
-            espeak_Initialize(AUDIO_OUTPUT_RETRIEVAL, 0, data_path, 0);
+            espeak_Initialize(AUDIO_OUTPUT_RETRIEVAL, 0, config.espeak_data_path.c_str(), 0);
 
             espeak_VOICE voice;
             memset(&voice, 0, sizeof(voice));

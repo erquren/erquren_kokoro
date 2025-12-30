@@ -17,9 +17,15 @@ sudo apt install build-essential cmake
 ```
 cd cpp
 ./download_bsp.sh
-./build.sh
+
+# AX650
+./build_ax650.sh
+
+# AX630C
+./build_ax630c.sh
 ```
 
-编译完成的bin在install目录下
+ax650编译完的可执行程序在install_ax650中
+ax630c编译完的可执行程序在install_ax630c中
 
 其中kokoro是命令行demo，kokoro_srv是服务端
