@@ -5,18 +5,19 @@
 参考[cpp](cpp/README.md)
 
 
-# export.py 使用说明  
+# 模型转换 
 
-将 Kokoro 语音合成模型分割导出为多个ONNX子模型。
+将 Kokoro 语音合成模型分割导出为多个ONNX子模型并量化。
 
 模型下载后放到checkpoints/文件夹下  
 [kokoro-v1.0.pth](https://github.com/AXERA-TECH/kokoro.axera/releases/download/v1.0.0/kokoro-v1_0.pth)  
 
 ## 依赖环境  
+已验证环境：python3.10。
 ```bash
 创建虚拟环境 
-conda create -n kokoro_export python=3.10
-conda activate kokoro_export
+python3.10 -m venv kokoro_export
+source kokoro_export/bin/activate
 
 安装依赖库
 pip install -r requirements.txt
