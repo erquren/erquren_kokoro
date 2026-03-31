@@ -1,0 +1,414 @@
+name: RKNN 模型导出与量化基准测试
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag 名称 (例如: v1.0.0-rknn)'
+        required: true
+        default: 'v1.0.0-rknn'
+      input_length:
+        description: '输入序列长度（音素数量），默认96'
+        required: false
+        default: '96'
+      quantization_modes:
+        description: '量化模式（逗号分隔: fp16,none,int8）'
+        required: false
+        default: 'fp16,none,int8'
+      skip_benchmark:
+        description: '跳过量化基准测试'
+        required: false
+        default: 'false'
+        type: boolean
+      release_notes:
+        description: 'Release 说明（可选）'
+        required: false
+        default: ''
+
+jobs:
+  export-onnx:
+    name: 导出 ONNX 模型
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: 安装 Git LFS 并拉取大文件
+        run: |
+          git lfs install
+          git lfs pull
+
+      - name: 配置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 缓存 pip 依赖
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-rknn-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-rknn-
+            ${{ runner.os }}-pip-
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 下载 Kokoro 模型权重
+        run: |
+          mkdir -p checkpoints
+          echo "正在下载模型权重文件..."
+          curl -L \
+            https://github.com/AXERA-TECH/kokoro.axera/releases/download/v1.0.0/kokoro-v1_0.pth \
+            -o checkpoints/kokoro-v1_0.pth
+          echo "模型权重下载完成，文件大小: $(du -sh checkpoints/kokoro-v1_0.pth | cut -f1)"
+
+      - name: 导出 ONNX 模型
+        run: |
+          echo "正在导出 ONNX 模型 (input_length=${{ github.event.inputs.input_length }})..."
+          python export.py \
+            --config_file checkpoints/config.json \
+            --checkpoint_path checkpoints/kokoro-v1_0.pth \
+            --output_dir onnx \
+            --use_real_sample \
+            --lang_code a \
+            --input_length ${{ github.event.inputs.input_length }} \
+            --voice checkpoints/voices/af_heart.pt
+          echo "ONNX 导出完成"
+          ls -lh onnx/
+
+      - name: 验证 ONNX 模型
+        run: |
+          python - <<'EOF'
+          import onnx, os
+
+          models = [
+              "onnx/model1_bert_duration_sim.onnx",
+              "onnx/model2_f0_n_asr_sim.onnx",
+              "onnx/model3_decoder_sim.onnx",
+              "onnx/model4_har_sim.onnx",
+          ]
+          for path in models:
+              if os.path.exists(path):
+                  m = onnx.load(path)
+                  onnx.checker.check_model(m)
+                  size_mb = os.path.getsize(path) / 1024 / 1024
+                  print(f"✓ {path} 验证通过 ({size_mb:.2f} MB)")
+              else:
+                  alt = path.replace("_sim.onnx", ".onnx")
+                  if os.path.exists(alt):
+                      m = onnx.load(alt)
+                      onnx.checker.check_model(m)
+                      size_mb = os.path.getsize(alt) / 1024 / 1024
+                      print(f"✓ {alt} 验证通过 ({size_mb:.2f} MB, 无 sim 版本)")
+                  else:
+                      print(f"✗ {path} 不存在！")
+                      exit(1)
+          print("所有 ONNX 模型验证通过！")
+          EOF
+
+      - name: 上传 ONNX 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnx-models
+          path: onnx/
+          retention-days: 1
+
+  convert-rknn:
+    name: RKNN 转换与基准测试
+    runs-on: ubuntu-latest
+    needs: export-onnx
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 缓存 pip 依赖
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-rknn-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-rknn-
+
+      - name: 安装基础依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy onnx==1.16.2 onnxruntime==1.19.2 onnxsim
+
+      - name: 安装 rknn-toolkit2
+        run: |
+          echo "尝试安装 rknn-toolkit2..."
+          pip install rknn-toolkit2 || {
+            echo "::warning::rknn-toolkit2 安装失败，将仅生成 ONNX 大小报告"
+            echo "RKNN_AVAILABLE=false" >> $GITHUB_ENV
+          }
+          echo "RKNN_AVAILABLE=true" >> $GITHUB_ENV
+
+      - name: 下载 ONNX 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: onnx-models
+          path: onnx/
+
+      - name: 检查 ONNX 文件
+        run: |
+          echo "ONNX 模型文件:"
+          ls -lh onnx/*.onnx 2>/dev/null || echo "无 ONNX 文件"
+          echo ""
+          echo "校准数据文件:"
+          ls -lh onnx/*.zip 2>/dev/null || echo "无校准数据"
+
+      - name: 逐模式转换 RKNN 模型
+        if: env.RKNN_AVAILABLE == 'true'
+        run: |
+          IFS=',' read -ra MODES <<< "${{ github.event.inputs.quantization_modes }}"
+          for MODE in "${MODES[@]}"; do
+            echo ""
+            echo "============================================"
+            echo "转换模式: ${MODE}"
+            echo "============================================"
+            python convert_rknn.py \
+              --onnx_dir onnx \
+              --output_dir "rknn_output_${MODE}" \
+              --quantization "${MODE}" \
+              --models model2_f0_n_asr model3_decoder model4_har \
+              --skip_verify || echo "::warning::${MODE} 模式转换部分失败"
+          done
+
+      - name: 运行量化基准测试
+        if: github.event.inputs.skip_benchmark != 'true'
+        run: |
+          IFS=',' read -ra MODES <<< "${{ github.event.inputs.quantization_modes }}"
+          MODE_ARGS=""
+          for MODE in "${MODES[@]}"; do
+            MODE_ARGS="${MODE_ARGS} ${MODE}"
+          done
+
+          python benchmark_rknn_quantization.py \
+            --onnx_dir onnx \
+            --output_dir benchmark_output \
+            --modes ${MODE_ARGS} \
+            --models model2_f0_n_asr model3_decoder model4_har || {
+              echo "::warning::基准测试部分失败（可能是 rknn-toolkit2 不可用）"
+            }
+
+      - name: 生成 ONNX 文件大小报告（无 RKNN 时的回退）
+        if: env.RKNN_AVAILABLE != 'true'
+        run: |
+          python - <<'PYEOF'
+          import os, json, time
+
+          onnx_dir = "onnx"
+          models = {
+              "model2_f0_n_asr": "model2_f0_n_asr_sim.onnx",
+              "model3_decoder": "model3_decoder_sim.onnx",
+              "model4_har": "model4_har_sim.onnx",
+          }
+
+          report = {
+              "metadata": {
+                  "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                  "note": "rknn-toolkit2 不可用，仅报告 ONNX 文件大小",
+              },
+              "onnx_sizes": {},
+          }
+
+          print("=" * 50)
+          print("ONNX 模型文件大小报告")
+          print("=" * 50)
+
+          for name, filename in models.items():
+              path = os.path.join(onnx_dir, filename)
+              if os.path.exists(path):
+                  size = os.path.getsize(path)
+                  size_mb = size / 1024 / 1024
+                  print(f"  {name}: {size_mb:.2f} MB")
+                  report["onnx_sizes"][name] = {
+                      "file": filename,
+                      "size_bytes": size,
+                      "size_mb": round(size_mb, 2),
+                  }
+
+          os.makedirs("benchmark_output", exist_ok=True)
+          with open("benchmark_output/benchmark_report.json", "w") as f:
+              json.dump(report, f, indent=2)
+
+          # 生成 Markdown 报告
+          with open("benchmark_output/benchmark_report.md", "w") as f:
+              f.write("# RKNN 量化基准测试报告\n\n")
+              f.write("> **注意**: rknn-toolkit2 不可用，仅报告 ONNX 文件大小\n\n")
+              f.write("## ONNX 模型文件大小\n\n")
+              f.write("| 模型 | ONNX 文件 | 大小 |\n")
+              f.write("|------|-----------|------|\n")
+              for name, info in report["onnx_sizes"].items():
+                  f.write(f"| {name} | {info['file']} | {info['size_mb']:.2f} MB |\n")
+              f.write("\n> 完整 RKNN 转换和量化对比需要 rknn-toolkit2 环境\n")
+
+          print("\n报告已生成: benchmark_output/")
+          PYEOF
+
+      - name: 收集日志
+        if: always()
+        run: |
+          mkdir -p logs
+
+          # 收集基准测试日志
+          if [ -f benchmark_output/benchmark.log ]; then
+            cp benchmark_output/benchmark.log logs/
+          fi
+
+          # 收集基准测试报告
+          if [ -f benchmark_output/benchmark_report.json ]; then
+            cp benchmark_output/benchmark_report.json logs/
+          fi
+          if [ -f benchmark_output/benchmark_report.md ]; then
+            cp benchmark_output/benchmark_report.md logs/
+          fi
+
+          # 收集各模式的转换报告
+          for MODE_DIR in rknn_output_*; do
+            if [ -d "${MODE_DIR}" ]; then
+              for f in "${MODE_DIR}"/conversion_report_*.json; do
+                if [ -f "$f" ]; then
+                  cp "$f" logs/
+                fi
+              done
+            fi
+          done
+
+          echo "收集的日志文件:"
+          ls -la logs/
+
+      - name: 输出基准测试报告摘要
+        if: always()
+        run: |
+          if [ -f benchmark_output/benchmark_report.md ]; then
+            echo "## 📊 RKNN 量化基准测试报告" >> $GITHUB_STEP_SUMMARY
+            cat benchmark_output/benchmark_report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ⚠️ 基准测试报告未生成" >> $GITHUB_STEP_SUMMARY
+            echo "请检查上方步骤的日志" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 打包 RKNN 模型和报告
+        run: |
+          INPUT_LEN=${{ github.event.inputs.input_length }}
+          TAG=${{ github.event.inputs.tag_name }}
+
+          mkdir -p release_package
+
+          # 打包 ONNX 模型
+          cd onnx
+          zip -r "../release_package/kokoro_onnx_input${INPUT_LEN}.zip" \
+            *.onnx *.zip 2>/dev/null || true
+          cd ..
+
+          # 打包各量化模式的 RKNN 模型
+          for MODE_DIR in rknn_output_*; do
+            if [ -d "${MODE_DIR}" ]; then
+              MODE=$(echo "${MODE_DIR}" | sed 's/rknn_output_//')
+              cd "${MODE_DIR}"
+              zip -r "../release_package/kokoro_rknn_${MODE}_input${INPUT_LEN}.zip" \
+                *.rknn *.json 2>/dev/null || true
+              cd ..
+            fi
+          done
+
+          # 打包日志和报告
+          cd logs
+          zip -r "../release_package/benchmark_logs.zip" * 2>/dev/null || true
+          cd ..
+
+          echo "打包完成:"
+          ls -lh release_package/
+
+      - name: 上传基准测试产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rknn-benchmark-results
+          path: |
+            logs/
+            benchmark_output/
+          retention-days: 30
+
+      - name: 上传 RKNN 模型产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: rknn-models
+          path: release_package/
+          retention-days: 30
+
+      - name: 生成 Release 说明
+        run: |
+          INPUT_LEN=${{ github.event.inputs.input_length }}
+          TAG=${{ github.event.inputs.tag_name }}
+          CUSTOM_NOTES="${{ github.event.inputs.release_notes }}"
+          MODES="${{ github.event.inputs.quantization_modes }}"
+
+          cat > release_notes.md <<EOF
+          ## Kokoro RKNN 模型发布 ${TAG}
+
+          本 Release 包含 Kokoro TTS 模型的 ONNX 导出和 RKNN (RK3588) 转换结果。
+
+          ${CUSTOM_NOTES:+### 说明
+          ${CUSTOM_NOTES}}
+
+          ### 📦 包含文件
+
+          | 文件 | 说明 |
+          |------|------|
+          | \`kokoro_onnx_input${INPUT_LEN}.zip\` | ONNX 模型 + 校准数据 |
+          | \`kokoro_rknn_fp16_input${INPUT_LEN}.zip\` | FP16 量化 RKNN 模型 |
+          | \`kokoro_rknn_none_input${INPUT_LEN}.zip\` | 不量化 RKNN 模型 |
+          | \`kokoro_rknn_int8_input${INPUT_LEN}.zip\` | INT8 量化 RKNN 模型 |
+          | \`benchmark_logs.zip\` | 量化基准测试日志和报告 |
+
+          ### 🔬 量化模式对比
+
+          | 模式 | 说明 | 适用场景 |
+          |------|------|---------|
+          | FP16 | 半精度浮点 | 精度要求高，推理速度适中 |
+          | None | 不量化（RK3588 默认 FP16） | 与 FP16 等价 |
+          | INT8 | 8位整数量化 | 追求最小模型和最快推理速度 |
+
+          ### 🔧 参数
+
+          - **输入长度**: ${INPUT_LEN} 音素
+          - **目标平台**: RK3588
+          - **量化模式**: ${MODES}
+
+          ### ⚠️ 注意
+
+          - Model 1 (BERT) 因 rknn-toolkit2 兼容性问题暂未转换
+          - INT8 量化可能影响合成音质，请在实际设备上测试
+          - 详细精度对比见 \`benchmark_logs.zip\` 中的报告
+          EOF
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: Kokoro RKNN Models ${{ github.event.inputs.tag_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: release_package/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

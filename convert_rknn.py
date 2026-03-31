@@ -236,26 +236,42 @@ def run_onnx_inference(onnx_path, inputs):
 
 # ─── 转换 ────────────────────────────────────────────────────────────────
 
-def convert_single_model(model_name, model_info, onnx_dir, output_dir, verbose=False):
-    """转换单个 ONNX 模型为 RKNN 格式"""
+def convert_single_model(model_name, model_info, onnx_dir, output_dir,
+                         quantization_mode="fp16", verbose=False):
+    """
+    转换单个 ONNX 模型为 RKNN 格式。
+
+    参数:
+        quantization_mode: 量化模式
+            - "fp16": FP16 量化（默认，do_quantization=False）
+            - "none": 不量化，保持原始精度
+            - "int8": INT8 量化（需要校准数据）
+    """
+    suffix = f"_{quantization_mode}" if quantization_mode != "fp16" else ""
     result = {
         "model_name": model_name,
+        "quantization_mode": quantization_mode,
         "success": False,
         "rknn_path": None,
+        "rknn_size_bytes": 0,
+        "onnx_size_bytes": 0,
         "conversion_time": 0,
         "error": None,
     }
 
     onnx_path = os.path.join(onnx_dir, model_info["onnx_file"])
-    rknn_path = os.path.join(output_dir, f"{model_name}.rknn")
+    rknn_path = os.path.join(output_dir, f"{model_name}{suffix}.rknn")
 
     if not os.path.exists(onnx_path):
         result["error"] = f"ONNX 文件不存在: {onnx_path}"
         print(f"[ERROR] {result['error']}")
         return result
 
+    result["onnx_size_bytes"] = os.path.getsize(onnx_path)
+
     print(f"\n{'='*60}")
     print(f"转换模型: {model_name} ({model_info['description']})")
+    print(f"量化模式: {quantization_mode}")
     print(f"{'='*60}")
 
     start_time = time.time()
@@ -287,14 +303,38 @@ def convert_single_model(model_name, model_info, onnx_dir, output_dir, verbose=F
         rknn.release()
         return result
 
-    print("[Step 4] 构建 RKNN 模型 (do_quantization=False)...")
-    try:
-        ret = rknn.build(do_quantization=False)
-    except Exception as e:
-        result["error"] = f"构建 RKNN 模型异常: {e}"
-        print(f"[ERROR] {result['error']}")
-        rknn.release()
-        return result
+    # Step 4: 构建 RKNN 模型（根据量化模式选择参数）
+    if quantization_mode == "int8":
+        print("[Step 4] 构建 RKNN 模型 (do_quantization=True, INT8)...")
+        # 准备校准数据集
+        dataset_path = _prepare_calibration_dataset(
+            model_name, model_info, onnx_dir, output_dir)
+        try:
+            ret = rknn.build(do_quantization=True, dataset=dataset_path)
+        except Exception as e:
+            result["error"] = f"构建 RKNN 模型异常 (INT8): {e}"
+            print(f"[ERROR] {result['error']}")
+            rknn.release()
+            return result
+    elif quantization_mode == "none":
+        print("[Step 4] 构建 RKNN 模型 (do_quantization=False, 不量化)...")
+        try:
+            ret = rknn.build(do_quantization=False)
+        except Exception as e:
+            result["error"] = f"构建 RKNN 模型异常 (none): {e}"
+            print(f"[ERROR] {result['error']}")
+            rknn.release()
+            return result
+    else:
+        # fp16 (默认)
+        print("[Step 4] 构建 RKNN 模型 (do_quantization=False, FP16)...")
+        try:
+            ret = rknn.build(do_quantization=False)
+        except Exception as e:
+            result["error"] = f"构建 RKNN 模型异常: {e}"
+            print(f"[ERROR] {result['error']}")
+            rknn.release()
+            return result
 
     if ret != 0:
         result["error"] = f"构建 RKNN 模型失败 (ret={ret})"
@@ -311,24 +351,48 @@ def convert_single_model(model_name, model_info, onnx_dir, output_dir, verbose=F
         return result
 
     elapsed = time.time() - start_time
+    rknn_size = os.path.getsize(rknn_path)
     result["success"] = True
     result["rknn_path"] = rknn_path
+    result["rknn_size_bytes"] = rknn_size
     result["conversion_time"] = elapsed
 
-    rknn_size = os.path.getsize(rknn_path)
-    onnx_size = os.path.getsize(onnx_path)
+    onnx_size = result["onnx_size_bytes"]
     print(f"\n[SUCCESS] 模型转换成功!")
     print(f"  ONNX 大小: {onnx_size / 1024 / 1024:.2f} MB")
     print(f"  RKNN 大小: {rknn_size / 1024 / 1024:.2f} MB")
+    print(f"  量化模式: {quantization_mode}")
     print(f"  转换耗时: {elapsed:.2f} 秒")
 
     rknn.release()
     return result
 
 
+def _prepare_calibration_dataset(model_name, model_info, onnx_dir, output_dir):
+    """为 INT8 量化准备校准数据集文本文件"""
+    dataset_dir = os.path.join(output_dir, f"{model_name}_calibration")
+    os.makedirs(dataset_dir, exist_ok=True)
+
+    npy_paths = []
+    for input_name, (zip_name, dtype) in model_info["calibration_inputs"].items():
+        data = load_calibration_data(onnx_dir, zip_name, dtype)
+        npy_path = os.path.join(dataset_dir, f"{input_name}.npy")
+        np.save(npy_path, data)
+        npy_paths.append(npy_path)
+
+    # RKNN toolkit 要求 dataset 为文本文件，每行列出一组输入的 npy 路径（空格分隔）
+    dataset_path = os.path.join(dataset_dir, "dataset.txt")
+    with open(dataset_path, "w") as f:
+        f.write(" ".join(npy_paths) + "\n")
+
+    print(f"  校准数据集: {dataset_path}")
+    return dataset_path
+
+
 # ─── 精度验证 ─────────────────────────────────────────────────────────────
 
-def verify_single_model(model_name, model_info, onnx_dir, output_dir):
+def verify_single_model(model_name, model_info, onnx_dir, output_dir,
+                        quantization_mode="fp16"):
     """
     精度验证: 使用 RKNN 模拟器对比 ONNX 和 RKNN 推理输出。
     
@@ -336,6 +400,7 @@ def verify_single_model(model_name, model_info, onnx_dir, output_dir):
     """
     verify_result = {
         "model_name": model_name,
+        "quantization_mode": quantization_mode,
         "verified": False,
         "outputs": {},
         "error": None,
@@ -350,7 +415,7 @@ def verify_single_model(model_name, model_info, onnx_dir, output_dir):
         actual_onnx = preprocessed
 
     print(f"\n{'='*60}")
-    print(f"精度验证: {model_name}")
+    print(f"精度验证: {model_name} (量化模式: {quantization_mode})")
     print(f"{'='*60}")
 
     # 加载校准数据
@@ -371,7 +436,7 @@ def verify_single_model(model_name, model_info, onnx_dir, output_dir):
         return verify_result
 
     # RKNN 推理（模拟器）
-    print("[3] 构建 RKNN 模拟器...")
+    print(f"[3] 构建 RKNN 模拟器 (量化模式: {quantization_mode})...")
     rknn = RKNN(verbose=False)
     rknn.config(target_platform="rk3588")
     ret = rknn.load_onnx(model=actual_onnx)
@@ -380,7 +445,12 @@ def verify_single_model(model_name, model_info, onnx_dir, output_dir):
         rknn.release()
         return verify_result
 
-    ret = rknn.build(do_quantization=False)
+    if quantization_mode == "int8":
+        dataset_path = _prepare_calibration_dataset(
+            model_name, model_info, onnx_dir, output_dir)
+        ret = rknn.build(do_quantization=True, dataset=dataset_path)
+    else:
+        ret = rknn.build(do_quantization=False)
     if ret != 0:
         verify_result["error"] = f"构建 RKNN 失败 (ret={ret})"
         rknn.release()
@@ -450,16 +520,25 @@ def main():
     parser.add_argument("--skip_verify", action="store_true", help="跳过精度验证")
     parser.add_argument("--models", type=str, nargs="*", default=None,
                         help="指定模型（默认全部）")
+    parser.add_argument("--quantization", type=str, default="fp16",
+                        choices=["fp16", "none", "int8"],
+                        help="量化模式: fp16(默认), none(不量化), int8(INT8量化)")
     parser.add_argument("--verbose", action="store_true", help="详细日志")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
     model_names = args.models or list(MODELS.keys())
 
+    quant_label = {
+        "fp16": "FP16 (float16)",
+        "none": "无量化 (保持原始精度)",
+        "int8": "INT8 量化",
+    }
+
     print("=" * 60)
     print("Kokoro TTS: ONNX → RKNN 模型转换")
     print(f"  目标平台: RK3588")
-    print(f"  量化: 无 (float16)")
+    print(f"  量化模式: {quant_label.get(args.quantization, args.quantization)}")
     print(f"  ONNX 目录: {args.onnx_dir}")
     print(f"  输出目录: {args.output_dir}")
     print(f"  模型: {model_names}")
@@ -472,7 +551,8 @@ def main():
             print(f"[WARNING] 未知模型: {name}")
             continue
         result = convert_single_model(
-            name, MODELS[name], args.onnx_dir, args.output_dir, args.verbose)
+            name, MODELS[name], args.onnx_dir, args.output_dir,
+            quantization_mode=args.quantization, verbose=args.verbose)
         conversion_results[name] = result
 
     # 验证
@@ -484,7 +564,9 @@ def main():
         for name in model_names:
             if name not in MODELS or not conversion_results.get(name, {}).get("success"):
                 continue
-            vr = verify_single_model(name, MODELS[name], args.onnx_dir, args.output_dir)
+            vr = verify_single_model(
+                name, MODELS[name], args.onnx_dir, args.output_dir,
+                quantization_mode=args.quantization)
             verify_results[name] = vr
 
     # 汇总
@@ -494,7 +576,8 @@ def main():
 
     report = {
         "platform": "rk3588",
-        "quantization": "none (float16)",
+        "quantization": quant_label.get(args.quantization, args.quantization),
+        "quantization_mode": args.quantization,
         "toolkit": "rknn-toolkit2 v2.3.2",
         "conversion": {},
         "verification": {},
@@ -504,10 +587,15 @@ def main():
         status = "✅ 成功" if res["success"] else f"❌ 失败: {res.get('error', 'unknown')}"
         print(f"  {name}: {status}")
         if res["success"]:
-            print(f"    RKNN: {res['rknn_path']}, 耗时: {res['conversion_time']:.1f}s")
+            rknn_mb = res.get("rknn_size_bytes", 0) / 1024 / 1024
+            onnx_mb = res.get("onnx_size_bytes", 0) / 1024 / 1024
+            print(f"    RKNN: {res['rknn_path']} ({rknn_mb:.2f} MB), "
+                  f"ONNX: {onnx_mb:.2f} MB, 耗时: {res['conversion_time']:.1f}s")
         report["conversion"][name] = {
             "success": res["success"],
             "rknn_path": res.get("rknn_path"),
+            "rknn_size_bytes": res.get("rknn_size_bytes", 0),
+            "onnx_size_bytes": res.get("onnx_size_bytes", 0),
             "time_seconds": res.get("conversion_time"),
             "error": res.get("error"),
         }
@@ -524,7 +612,8 @@ def main():
                     print(f"  {name}/{out_name}: cos={cos:.6f} {icon}")
             report["verification"][name] = vr
 
-    report_path = os.path.join(args.output_dir, "conversion_report.json")
+    report_path = os.path.join(
+        args.output_dir, f"conversion_report_{args.quantization}.json")
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n报告: {report_path}")
