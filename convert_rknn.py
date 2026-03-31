@@ -247,7 +247,7 @@ def convert_single_model(model_name, model_info, onnx_dir, output_dir,
             - "none": 不量化，保持原始精度
             - "int8": INT8 量化（需要校准数据）
     """
-    suffix = f"_{quantization_mode}" if quantization_mode != "fp16" else ""
+    suffix = f"_{quantization_mode}"
     result = {
         "model_name": model_name,
         "quantization_mode": quantization_mode,
@@ -317,6 +317,8 @@ def convert_single_model(model_name, model_info, onnx_dir, output_dir,
             rknn.release()
             return result
     elif quantization_mode == "none":
+        # "none" 与 "fp16" 在 RK3588 上行为一致，因为 NPU 默认使用 FP16 计算。
+        # 两者都使用 do_quantization=False，保留作为基准对照。
         print("[Step 4] 构建 RKNN 模型 (do_quantization=False, 不量化)...")
         try:
             ret = rknn.build(do_quantization=False)

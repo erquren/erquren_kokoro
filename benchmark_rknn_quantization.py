@@ -621,11 +621,12 @@ def generate_markdown_report(all_results, output_dir):
     # 结论
     lines.append("## 5. 结论")
     lines.append("")
-    lines.append("- **FP16**: 默认量化模式，文件大小适中，精度损失极小（余弦相似度 > 0.9999）")
-    lines.append("- **不量化 (None)**: 与 FP16 在 RKNN 中行为一致"
-                 "（RK3588 NPU 默认使用 FP16 计算）")
-    lines.append("- **INT8**: 文件大小最小（约为 ONNX 的 25-50%），"
-                 "但精度损失较大，需根据应用场景评估可接受度")
+    lines.append("- **FP16**: 默认量化模式（`do_quantization=False`），RK3588 NPU 默认使用 FP16 计算，"
+                 "文件大小适中，精度损失极小（余弦相似度 > 0.9999）")
+    lines.append("- **不量化 (None)**: 同样使用 `do_quantization=False`，与 FP16 在 RK3588 上行为一致"
+                 "（作为基准对照组）")
+    lines.append("- **INT8**: 使用 `do_quantization=True` 进行 INT8 量化，"
+                 "文件大小最小（约为 ONNX 的 25-50%），但精度损失较大，需根据应用场景评估")
     lines.append("")
     lines.append("> **注意**: Model 1 (BERT) 因 rknn-toolkit2 v2.3.2 内部 bug "
                  "导致 segfault，未纳入本次测试")

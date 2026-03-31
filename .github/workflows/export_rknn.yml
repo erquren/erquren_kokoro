@@ -154,11 +154,13 @@ jobs:
       - name: 安装 rknn-toolkit2
         run: |
           echo "尝试安装 rknn-toolkit2..."
-          pip install rknn-toolkit2 || {
+          if pip install rknn-toolkit2; then
+            echo "RKNN_AVAILABLE=true" >> $GITHUB_ENV
+            echo "rknn-toolkit2 安装成功"
+          else
             echo "::warning::rknn-toolkit2 安装失败，将仅生成 ONNX 大小报告"
             echo "RKNN_AVAILABLE=false" >> $GITHUB_ENV
-          }
-          echo "RKNN_AVAILABLE=true" >> $GITHUB_ENV
+          fi
 
       - name: 下载 ONNX 产物
         uses: actions/download-artifact@v4
@@ -314,26 +316,32 @@ jobs:
           mkdir -p release_package
 
           # 打包 ONNX 模型
-          cd onnx
-          zip -r "../release_package/kokoro_onnx_input${INPUT_LEN}.zip" \
-            *.onnx *.zip 2>/dev/null || true
-          cd ..
+          if ls onnx/*.onnx 1>/dev/null 2>&1; then
+            cd onnx
+            zip -r "../release_package/kokoro_onnx_input${INPUT_LEN}.zip" \
+              *.onnx *.zip
+            cd ..
+          else
+            echo "::warning::无 ONNX 文件可打包"
+          fi
 
           # 打包各量化模式的 RKNN 模型
           for MODE_DIR in rknn_output_*; do
-            if [ -d "${MODE_DIR}" ]; then
+            if [ -d "${MODE_DIR}" ] && ls "${MODE_DIR}"/*.rknn 1>/dev/null 2>&1; then
               MODE=$(echo "${MODE_DIR}" | sed 's/rknn_output_//')
               cd "${MODE_DIR}"
               zip -r "../release_package/kokoro_rknn_${MODE}_input${INPUT_LEN}.zip" \
-                *.rknn *.json 2>/dev/null || true
+                *.rknn *.json
               cd ..
             fi
           done
 
           # 打包日志和报告
-          cd logs
-          zip -r "../release_package/benchmark_logs.zip" * 2>/dev/null || true
-          cd ..
+          if ls logs/* 1>/dev/null 2>&1; then
+            cd logs
+            zip -r "../release_package/benchmark_logs.zip" *
+            cd ..
+          fi
 
           echo "打包完成:"
           ls -lh release_package/
