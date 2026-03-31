@@ -1,0 +1,174 @@
+name: 导出 ONNX 模型并发布到 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag 名称 (例如: v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      input_length:
+        description: '输入序列长度（音素数量），默认96'
+        required: false
+        default: '96'
+      release_notes:
+        description: 'Release 说明（可选）'
+        required: false
+        default: ''
+
+jobs:
+  export-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: 安装 Git LFS 并拉取大文件
+        run: |
+          git lfs install
+          git lfs pull
+
+      - name: 配置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 缓存 pip 依赖
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 下载 Kokoro 模型权重
+        run: |
+          mkdir -p checkpoints
+          echo "正在下载模型权重文件..."
+          curl -L \
+            https://github.com/AXERA-TECH/kokoro.axera/releases/download/v1.0.0/kokoro-v1_0.pth \
+            -o checkpoints/kokoro-v1_0.pth
+          echo "模型权重下载完成，文件大小: $(du -sh checkpoints/kokoro-v1_0.pth | cut -f1)"
+
+      - name: 导出英文 ONNX 模型（input_length=${{ github.event.inputs.input_length }}）
+        run: |
+          echo "正在导出英文 ONNX 模型..."
+          python export.py \
+            --config_file checkpoints/config.json \
+            --checkpoint_path checkpoints/kokoro-v1_0.pth \
+            --output_dir onnx \
+            --use_real_sample \
+            --lang_code a \
+            --input_length ${{ github.event.inputs.input_length }} \
+            --voice checkpoints/voices/af_heart.pt
+          echo "英文 ONNX 导出完成"
+          ls -lh onnx/
+
+      - name: 验证导出的 ONNX 模型
+        run: |
+          python - <<'EOF'
+          import onnx, os
+
+          models = [
+              "onnx/model1_bert_duration_sim.onnx",
+              "onnx/model2_f0_n_asr_sim.onnx",
+              "onnx/model3_decoder_sim.onnx",
+              "onnx/model4_har_sim.onnx",
+          ]
+          for path in models:
+              if os.path.exists(path):
+                  m = onnx.load(path)
+                  onnx.checker.check_model(m)
+                  print(f"✓ {path} 验证通过")
+              else:
+                  # 尝试不带 _sim 后缀的版本
+                  alt = path.replace("_sim.onnx", ".onnx")
+                  if os.path.exists(alt):
+                      m = onnx.load(alt)
+                      onnx.checker.check_model(m)
+                      print(f"✓ {alt} 验证通过（无 sim 版本）")
+                  else:
+                      print(f"✗ {path} 不存在！")
+                      exit(1)
+          print("所有 ONNX 模型验证通过！")
+          EOF
+
+      - name: 打包 ONNX 模型
+        run: |
+          INPUT_LEN=${{ github.event.inputs.input_length }}
+          ZIP_NAME="kokoro_onnx_input${INPUT_LEN}.zip"
+
+          echo "正在打包 ONNX 模型..."
+          cd onnx
+          zip -r "../${ZIP_NAME}" *.onnx *.zip
+          cd ..
+
+          echo "打包完成: ${ZIP_NAME}"
+          echo "文件大小: $(du -sh ${ZIP_NAME} | cut -f1)"
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+
+      - name: 生成 Release 说明
+        run: |
+          INPUT_LEN=${{ github.event.inputs.input_length }}
+          CUSTOM_NOTES="${{ github.event.inputs.release_notes }}"
+
+          cat > release_notes.md <<EOF
+          ## Kokoro ONNX 模型发布 ${{ github.event.inputs.tag_name }}
+
+          本 Release 包含将 Kokoro TTS 模型分割导出的 4 个 ONNX 子模型（固定输入长度 **${INPUT_LEN}** 个音素）。
+
+          ${CUSTOM_NOTES:+### 说明
+          ${CUSTOM_NOTES}}
+
+          ### 📦 包含文件
+
+          | 文件名 | 说明 |
+          |--------|------|
+          | \`model1_bert_duration.onnx\` / \`_sim.onnx\` | BERT + 时长预测模块 |
+          | \`model2_f0_n_asr.onnx\` / \`_sim.onnx\` | F0/能量预测 + 文本编码模块 |
+          | \`model3_decoder.onnx\` / \`_sim.onnx\` | 解码器模块 |
+          | \`model4_har.onnx\` / \`_sim.onnx\` | 谐波合成模块 |
+          | \`model*_input_*.zip\` | 各模型量化校准数据（NumPy 格式）|
+
+          > **\`_sim.onnx\`** 为经过 onnxsim 简化后的模型，推荐用于量化和推理。
+
+          ### 🚀 使用说明
+
+          详细导出流程和使用教程请参见：[EXPORT_TUTORIAL.md](https://github.com/${{ github.repository }}/blob/${{ github.event.inputs.tag_name }}/EXPORT_TUTORIAL.md)
+
+          ### 🔧 模型参数
+
+          - **输入长度（input_length）**: ${INPUT_LEN} 个音素
+          - **opset 版本**: 14
+          - **导出工具**: PyTorch + onnxsim
+
+          ### ⚠️ 注意事项
+
+          - 模型输入形状固定，不支持动态输入
+          - 推荐使用带 \`_sim\` 后缀的简化模型用于 Axera NPU 量化
+          - Axera 量化转换配置请参见 \`config/\` 目录下的 JSON 文件
+          EOF
+
+          echo "Release 说明已生成"
+
+      - name: 创建 GitHub Release 并上传模型
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: Kokoro ONNX Models ${{ github.event.inputs.tag_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: ${{ env.ZIP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
