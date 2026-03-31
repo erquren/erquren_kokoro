@@ -9,17 +9,19 @@
 
 将 Kokoro 语音合成模型分割导出为多个ONNX子模型并量化。
 
+> 📖 **详细教程**：完整的导出流程、输出文件说明和常见问题请参见 [EXPORT_TUTORIAL.md](EXPORT_TUTORIAL.md)
+
 模型下载后放到checkpoints/文件夹下  
 [kokoro-v1.0.pth](https://github.com/AXERA-TECH/kokoro.axera/releases/download/v1.0.0/kokoro-v1_0.pth)  
 
 ## 依赖环境  
 已验证环境：python3.10。
 ```bash
-创建虚拟环境 
+# 创建虚拟环境 
 python3.10 -m venv kokoro_export
 source kokoro_export/bin/activate
 
-安装依赖库
+# 安装依赖库
 pip install -r requirements.txt
 ```
 
@@ -41,9 +43,8 @@ pip install -r requirements.txt
 1. 模型配置和权重文件（默认在 checkpoints/ 目录下）。
 2. 运行脚本导出 ONNX 子模型：
 
-
 ```bash
-python export.py --use_real_sampl -l z -o onnx --voice checkpoints/voices/zf_xiaoyi.pt
+python export.py --use_real_sample -l z -o onnx --voice checkpoints/voices/zf_xiaoyi.pt
 ```
 
 或者指定text
@@ -56,9 +57,17 @@ python export.py --use_real_sample --text "The sky above the port was the color 
 - 导出的 ONNX 文件将保存在指定 output_dir 目录下。
 - zip文件可作为量化数据，带sim后缀的onnx模型用于量化和推理
 
+## 自动导出并发布到 Release
+
+本仓库提供了 GitHub Actions 工作流，可一键完成导出并发布到 GitHub Release：
+
+1. 进入仓库 **Actions** 标签页
+2. 选择 **"导出 ONNX 模型并发布到 Release"** 工作流
+3. 点击 **"Run workflow"**，填写 Release tag 等参数后启动
+
 ## 模型转换（onnx->axera）
 ```
 model1,model2，model3 3个模型需要进行转换
-以modle1为例：
+以model1为例：
 pulsar2 build --config config/kokoro_1.json
 ```
