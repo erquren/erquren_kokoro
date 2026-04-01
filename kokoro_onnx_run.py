@@ -498,7 +498,8 @@ class OnnxInferenceEngine:
         spec = np.exp(x[0, :n_freq, :])                       # 幅度谱 (从log域恢复)
         phase_sin = np.sin(x[0, n_freq:, :])                   # 相位的sin值
         # 由sin²+cos²=1推导cos (取正值，因为cos在主值区间可能为正)
-        cos_part = np.sqrt(np.clip(1.0 - phase_sin * phase_sin, 0.0, 1.0))
+        phase_sin_sq = phase_sin * phase_sin
+        cos_part = np.sqrt(np.clip(1.0 - phase_sin_sq, 0.0, 1.0))
         # 构造复数STFT: magnitude * (cos + j*sin)
         stft_matrix = spec * (cos_part + 1j * phase_sin)
 
@@ -873,7 +874,10 @@ def main():
     print(f"  音频采样点:  {len(audio)}")
     print(f"  采样率:      {SAMPLE_RATE}Hz")
     print(f"  推理耗时:    {inference_time:.3f}s")
-    print(f"  RTF(实时因子): {inference_time / audio_duration:.4f}")
+    if audio_duration > 0:
+        print(f"  RTF(实时因子): {inference_time / audio_duration:.4f}")
+    else:
+        print(f"  RTF(实时因子): N/A (音频时长为0)")
 
     # 性能分解
     engine.print_performance()
