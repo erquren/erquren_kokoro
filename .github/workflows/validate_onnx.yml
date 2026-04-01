@@ -18,6 +18,9 @@ on:
     paths:
       - 'kokoro_onnx_run.py'
 
+permissions:
+  contents: read
+
 jobs:
   validate-onnx:
     runs-on: ubuntu-latest
