@@ -1,0 +1,112 @@
+name: 验证 ONNX 模型推理
+
+# 触发条件:
+#   1. 手动触发 (workflow_dispatch)
+#   2. kokoro_onnx_run.py 文件变更时自动触发
+on:
+  workflow_dispatch:
+    inputs:
+      onnx_release_tag:
+        description: 'ONNX模型Release标签 (例如: v1.0.0-rknn)'
+        required: false
+        default: 'v1.0.0-rknn'
+      warmup_runs:
+        description: '预热推理次数'
+        required: false
+        default: '1'
+  push:
+    paths:
+      - 'kokoro_onnx_run.py'
+
+jobs:
+  validate-onnx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # 1. 检出代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 2. 配置 Python 环境
+      - name: 配置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. 缓存 pip 依赖
+      - name: 缓存 pip 依赖
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-onnx-validate
+          restore-keys: |
+            ${{ runner.os }}-pip-onnx-
+
+      # 4. 安装推理所需的最小依赖
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install onnxruntime numpy soundfile
+
+      # 5. 安装系统音频库 (soundfile 需要 libsndfile)
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsndfile1
+
+      # 6. 下载 ONNX 模型包
+      - name: 下载 ONNX 模型
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.onnx_release_tag || 'v1.0.0-rknn' }}
+        run: |
+          echo "正在从 Release ${RELEASE_TAG} 下载 ONNX 模型..."
+          curl -L -f \
+            "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/kokoro_onnx_input96.zip" \
+            -o kokoro_onnx_input96.zip
+          echo "下载完成，文件大小: $(du -sh kokoro_onnx_input96.zip | cut -f1)"
+
+          echo "正在解压..."
+          mkdir -p onnx
+          unzip -o kokoro_onnx_input96.zip -d onnx
+
+          echo "解压完成，目录内容:"
+          ls -lh onnx/
+
+      # 7. 运行 ONNX 推理验证
+      - name: 运行 ONNX 推理验证
+        env:
+          WARMUP: ${{ github.event.inputs.warmup_runs || '1' }}
+        run: |
+          echo "开始 ONNX 模型推理验证..."
+          python kokoro_onnx_run.py \
+            -d onnx \
+            -o output_onnx.wav \
+            --warmup ${WARMUP}
+
+      # 8. 验证输出文件
+      - name: 验证输出文件
+        run: |
+          if [ ! -f output_onnx.wav ]; then
+            echo "✗ 错误: 输出文件 output_onnx.wav 不存在"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s output_onnx.wav)
+          echo "输出文件大小: ${FILE_SIZE} bytes"
+
+          if [ "$FILE_SIZE" -lt 1000 ]; then
+            echo "✗ 错误: 输出文件过小 (${FILE_SIZE} bytes)，可能推理失败"
+            exit 1
+          fi
+
+          echo "✓ 输出文件验证通过"
+
+      # 9. 上传音频文件作为 Artifact
+      - name: 上传验证音频
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnx-validation-audio
+          path: output_onnx.wav
+          retention-days: 7
