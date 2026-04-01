@@ -1,2 +1,6 @@
 *.onnx
 __pycache__/
+*.rknn
+rknn_output*/
+benchmark_output/
+logs/
